@@ -7,6 +7,8 @@ import * as child from 'child_process';
 import fs from 'node:fs';
 import cors from 'cors'
 import convert from 'xml-js';
+// const XmlStream = require('xml-stream');
+import XmlStream from 'xml-stream';
 
 const app = express()
 app.use(express.json())
@@ -144,6 +146,56 @@ app.post('/executeScript', (req, res) => {
   });
 })
 
+app.get('/getAnimationPoints',(req,res)=>{
+  // console.log('Getting Animation Points')
+  const xmlFilePath = '/home/chetan/Downloads/ex/paths/complete_paths.kml'; // Update with your file path
+    const stream = fs.createReadStream(xmlFilePath);
+    const xmlStream = new XmlStream(stream);
+    const result = [];
+
+    xmlStream.on('endElement: Placemark', (item) => {
+        // Collect desired data from each Placemark
+        if (item.LineString && item.LineString.coordinates) {
+          const coords = item.LineString.coordinates.trim().split(' ').map(coord => {
+              const [lng, lat] = coord.split(',').map(Number); // Convert to numbers
+              return { lng, lat };
+          });
+          console.log(coords)
+  
+          result.push({
+              name: item.name,
+              coordinates: coords,
+              // Add any other properties you need
+          });
+      } else {
+          console.warn('No LineString coordinates found for:', item.name);
+      }
+    });
+
+    xmlStream.on('end', () => {
+        // Send the parsed result to the frontend
+        console.log('completed parsing')
+        let formatedData = result.map((d)=>d.coordinates)
+        // setMarkers(data);
+        let finalData=[];
+        formatedData.forEach(elements => {
+          elements.forEach((ele,id)=>{
+            finalData.push([ele.lng, ele.lat])
+          })
+        });
+        // res.json(finalData);
+        console.log(finalData.length)
+        console.log(finalData[0])
+        const convexHull = calculateConvexHull(finalData);
+        res.json(convexHull);
+    });
+
+    xmlStream.on('error', (err) => {
+        console.error('Error parsing XML:', err);
+        res.status(500).send('Error parsing XML');
+    })
+})
+
 
 const server = app.listen(8000, () => {
   console.log('Server is running on port 8000')
@@ -164,3 +216,57 @@ wss.on('connection', (ws) => {
     console.log('WebSocket connection closed');
   });
 });
+
+
+
+// util function
+function calculateConvexHull(points) {
+  // Sort points by x-coordinate, and then by y-coordinate to break ties
+  points.sort((a, b) => {
+      if (a[0] === b[0]) return a[1] - b[1];
+      return a[0] - b[0];
+  });
+
+  // Helper function to compute the cross product of vectors OA and OB
+  // A positive cross product indicates a counter-clockwise turn, 0 indicates a collinear point, and negative indicates a clockwise turn
+  function cross(o, a, b) {
+      return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  }
+
+  // Build the lower hull
+  const lower = [];
+  for (let point of points) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
+          lower.pop();
+      }
+      lower.push(point);
+  }
+
+  // Build the upper hull
+  const upper = [];
+  for (let i = points.length - 1; i >= 0; i--) {
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], points[i]) <= 0) {
+          upper.pop();
+      }
+      upper.push(points[i]);
+  }
+
+  // Remove the last point of each hull because it's repeated at the beginning of the other hull
+  lower.pop();
+  upper.pop();
+
+  // Concatenate lower and upper hull to get the full convex hull
+  return [...lower, ...upper];
+}
+
+// Example: Generating 800,000 random points
+const points = [];
+for (let i = 0; i < 800000; i++) {
+  points.push([Math.random() * 360 - 180, Math.random() * 180 - 90]); // Random points in long-lat range
+}
+
+// Compute the convex hull
+const convexHull = calculateConvexHull(points);
+
+// The convex hull is now in `convexHull` and can be used to draw the outline or further analyze.
+console.log(convexHull);
